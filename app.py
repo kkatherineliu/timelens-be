@@ -1,10 +1,13 @@
 import os
 import json
-import random
 from flask import Flask, request, jsonify
 from openai import OpenAI
 from supabase import create_client
 from dotenv import load_dotenv
+
+import random
+from datetime import datetime
+import pytz
 
 load_dotenv()
 
@@ -32,7 +35,7 @@ def home():
                 {"role": "user", "content": prompt}
             ],
             max_tokens=10,
-            temperature=0,
+            temperature=0.9,
             stream=True,
         )
 
@@ -42,30 +45,36 @@ def home():
                 name += chunk.choices[0].delta.content
 
 
-        prompt2 = "Give me a less than 30 word description of: " + name + " from the historical event: " + event
-        stream = client.chat.completions.create(
+        prompt2 = "Describe the personality of: " + name + " from the historical event: " + event + " in 30 words or less in a first person perspective"
+        stream2 = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant for giving a short description from a character from historical events."},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": "You are a helpful assistant for giving a short description of a character's personality from historical events."},
+                {"role": "user", "content": prompt2}
             ],
             max_tokens=50,
-            temperature=0,
+            temperature=0.9,
             stream=True,
         )
 
-        description = ""
-        for chunk in stream:
+        personality = ""
+        for chunk in stream2:
             if chunk.choices[0].delta.content is not None:
-                description += chunk.choices[0].delta.content
+                personality += chunk.choices[0].delta.content
 
 
         # Generate a random 10 digit ID
-        random_id = random.randint(1000000000, 9999999999)
+        random_id = random.randint(100000, 999999)
+
 
         # send this to supabase
+        response = (
+            supabase.table("personas")
+            .insert({"id": random_id, "name": name, "personality": personality, "event": event})
+            .execute()
+        )
 
-        return jsonify({"id": random_id, "name": name, "description": description})
+        return jsonify({"id": random_id, "name": name, "personality": personality, "event": event})
     except Exception as e:
         # Print the full error message
         print(f"An error occurred when calling the OpenAI API: {e}")
