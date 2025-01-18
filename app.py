@@ -22,8 +22,13 @@ client = OpenAI(
 
 app = Flask(__name__)
 
-@app.route('/')
+
+@app.route('/api/submit')
 def home():
+    return "Starting flask backend"
+
+@app.route('/api/generate')
+def generate():
     try:
         event = "World War II"
 
@@ -63,7 +68,7 @@ def home():
                 personality += chunk.choices[0].delta.content
 
 
-        # Generate a random 10 digit ID
+        # Generate a random 6 digit ID
         random_id = random.randint(100000, 999999)
 
 
@@ -82,6 +87,69 @@ def home():
 
 
 
+@app.route("/api/chat", methods=['GET', 'POST'])
+def chat():
+    # persona_Id = request.args.get("persona_id") # persona id
+    # chat_history_Id = request.args.get("chat_history_Id")
+
+    persona_Id = "800142"
+    chat_history_Id = 338594
+    chat_history = None
+
+    chat_history_text = "the beginning" # basic text
+    # fetch a chat history if provided a story_Id
+    if chat_history_Id:
+        response = supabase.table("chat_history").select("*").eq("id", chat_history_Id).single().execute()
+        if(response):
+            chat_history = response.data
+            chat_history_text = chat_history.get("message")
+
+    # fetch persona based on id
+    response = supabase.table("personas").select("*").eq("id", persona_Id).single().execute()
+
+    # if we have an existing persona, add to story
+    if response:
+        persona = response.data
+
+        prompt = "Starting from " + chat_history_text + ", Tell us the story of " + persona.get("event") + " in the perspective of " + persona.get("name") + " who has a personality: " + persona.get("personality") + " Within 150 words."
+        stream = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant who retells a historical event in the perspective of a given character with a given personality."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=200,
+            temperature=0.9,
+            stream=True,
+        )
+
+        story = ""
+        for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                story += chunk.choices[0].delta.content
+    
+    if chat_history:
+        # update the data in supabase if chat_history_id exists (if gpt gets confused, add in the prompt to chat history)
+        supabaseResponse = (
+            supabase.table("chat_history")
+            .update({"message": chat_history_text + " " + story})
+            .eq("id", chat_history_Id)
+            .execute()
+        )
+    else:
+
+        # Generate a random 6 digit ID
+        random_id = random.randint(100000, 999999)
+
+        # if no chat_history_id, then create new row in supabase
+        supabaseResponse = (
+            supabase.table("chat_history")
+            .insert({"id": random_id, "persona_id": persona_Id, "message": chat_history_text + " " + story, "is_user_input": False})
+            .execute()
+        )
+        
+
+    return story
 
 
 # @app.route('/test/supabase', methods=['GET'])
@@ -98,43 +166,7 @@ def home():
 
 #     return response.data
 
-# @app.route("/api/submit")
-# def submit_data():
-#     event = request.args.get("event")
-
-#     # using the event, create personas and store into supabase
-#     # need to add validation/prompt to avoid duplicating existing characters from the same event
-
-#     # Generate character name and description from OpenAI
-#     character_completion = openai.chat.completions.create(
-#         model="gpt-4o-mini",
-#         character_name=[
-#             {"role": "system", "content": "You only return the name of a character given a historical event."},
-#             {"role": "user", "content": "Give me the name of one major character from the historical event: " + event}, # for now use major characters
-#         ]
-#     )
-
-#     name = character_completion['choices'][0]['message']['content']
-
-#     description_completion = openai.chat.completions.create(
-#         model="gpt-4o-mini",
-#         description=[
-#             {"role": "system", "content": "Assistant who gives a non-bias description of a character given their name."},
-#             {"role": "user", "content": "Give a short description of the major character: " + name + " from the historical event: " + event}, # for now use major characters
-#         ]
-#     )
-
     
-#     description = description_completion['choices'][0]['message']['content']
-    
-#     # return for teting purposes
-#     return jsonify({"name": name, "description": description})
-
-#     # store variables in supabase
-    
-# @app.route("/api/chat", methods=['GET'])
-# def submit_data():
-#     persona_Id = request.args.get("persona_Id")
     
 
 
