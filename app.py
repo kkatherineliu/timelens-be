@@ -31,10 +31,16 @@ def home():
 @app.route('/api/generate')
 def generate():
     try:
-        event = "World War II"
+        event = "Y2K"
         # event = request.args.get("event")
+        response = supabase.table("personas").select("*").eq("event", event).execute()
+        listOfPersonas = ""
+        
+        if response.data:
+            for persona in response.data:
+                listOfPersonas += (persona.get("name") + ", ")
 
-        prompt = "Give me only the name of one major character from the historical event: " + event
+        prompt = "Give me only the name of one major character who can be a person, inanimate object, etc. from the historical event: " + event + " who is not in the list: " + listOfPersonas
         stream = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -155,19 +161,8 @@ def chat():
         for chunk in stream3:
             if chunk.choices[0].delta.content is not None:
                 subevent_title += chunk.choices[0].delta.content
-
-
-        # Add or update data depending on if chat history
-        # if chat_history_text != "the beginning":
-        #     # update the data in supabase if chat_history_id exists (if gpt gets confused, add in the prompt to chat history)
-        #     supabaseResponse = (
-        #         supabase.table("chat_history")
-        #         .update({"message": chat_history_text + " " + story})
-        #         .eq("id", chat_history_Id)
-        #         .execute()
-        #     )
-        # else:
-            # if no chat_history_id, then create new row in supabase
+        
+        # Create a new row in database for chat history
         supabaseResponse = (
             supabase.table("chat_history")
             .insert({"persona_id": persona_Id, "message": story, "is_user_input": False, "subevent_number": subevent_number, "subevent_title": subevent_title})
