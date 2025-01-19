@@ -1,66 +1,274 @@
-from openai import OpenAI
 import os
-
+import json
+from flask import Flask, request, jsonify
+from openai import OpenAI
+from supabase import create_client
 from dotenv import load_dotenv
+
+import random
+from datetime import datetime
+import pytz
 
 load_dotenv()
 
+supabase_url = os.getenv("SUPABASE_URL")
+supabase_key = os.getenv("SUPABASE_ANON_KEY")
+supabase = create_client(supabase_url, supabase_key)
+
+# from openai import OpenAI
 client = OpenAI(
     api_key = os.getenv("OPENAI_KEY")
 )
-event = "World War II"
-character_response = client.chat.completions.create(
-    model="gpt-4o-2024-08-06",
-    messages=[
-        {
-            "role": "user", 
-            "content": "Give me only the name of one major character from the historical event: " + event
-        },
-    ],
-    response_format={
-        "type": "json_schema",
-        "json_schema": {
-            "name": "name_schema",
-            # "schema": {
-            #     "type": "object",
-            #     "properties": {
-            #         "name": {
-            #             "event": "The event that appears in the input",
-            #             "type": "string"
-            #         },
-            #         "additionalProperties": False
-            #     }
-            # }
-        }
-    }
-)
 
-# description_response = client.chat.completions.create(
-#     model="gpt-4o-2024-08-06",
-#     messages=[
-#         {
-#             "role": "user",
-#             "content": ("Give me a less than 30 word description of: " + character_response.choices[0].message.content + " from the historical event: " + event)
-#         },
-#     ],
-#     response_format={
-#         "type": "json_schema",
-#         "json_schema": {
-#             "name": "description_schema",
-#             "schema": {
-#                 "type": "object",
-#                 "properties": {
-#                     "description": {
-#                         "event": "The event that appears in the input",
-#                         "type": "string"
-#                     },
-#                     "additionalProperties": False
-#                 }
-#             }
-#         }
-#     }
-# )
+PORT = 5000
+app = Flask(__name__)
 
-character = character_response.choices[0].message.content
-description = description_response.choices[0].message.content
-# print(({"name": character, "description": description}))
+# Load JSON data
+# with open("components.json", "r") as file:
+#     components = json.load(file)
+
+
+@app.route('/')
+def home():
+    return "Starting flask backend"
+
+#generates a persona with name, personality, event -------------------------------------------------------------------------------------------------------
+@app.route('/api/generate')
+def generate():
+    try:
+        event = "Y2K"
+        # event = request.args.get("event")
+        response = supabase.table("personas").select("*").eq("event", event).execute()
+        listOfPersonas = ""
+        
+        if response.data:
+            for persona in response.data:
+                listOfPersonas += (persona.get("name") + ", ")
+
+        prompt = "Give me only the name of one major character who can be a person, inanimate object, etc. from the historical event: " + event + " who is not in the list: " + listOfPersonas
+        stream = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant for giving a name of a character from historical events."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=10,
+            temperature=0.9,
+            stream=True,
+        )
+
+        name = ""
+        for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                name += chunk.choices[0].delta.content
+
+
+        prompt2 = "Describe the personality of: " + name + " from the historical event: " + event + " in 30 words or less in a first person perspective"
+        stream2 = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant for giving a short description of a character's personality from historical events."},
+                {"role": "user", "content": prompt2}
+            ],
+            max_tokens=50,
+            temperature=0.9,
+            stream=True,
+        )
+
+        personality = ""
+        for chunk in stream2:
+            if chunk.choices[0].delta.content is not None:
+                personality += chunk.choices[0].delta.content
+
+        # send this to supabase
+        response = (
+            supabase.table("personas")
+            .insert({"name": name, "personality": personality, "event": event})
+            .execute()
+        )
+
+        return jsonify({"name": name, "personality": personality, "event": event})
+    except Exception as e:
+        # Print the full error message
+        print(f"An error occurred when calling the OpenAI API: {e}")
+        return jsonify({"error": "An error occurred when processing your request."}), 500
+
+
+
+@app.route("/api/chat", methods=['GET', 'POST'])
+def chat(): 
+    # persona_Id = request.args.get("persona_id") # persona id
+
+    major_points = ["beginning", "climbing action", "falling action", "conclusion"]
+    persona_Id = "800142"
+
+    chat_history_text = "" # basic text
+    chat_history_start = "You are going continue telling story of "
+
+    # find all instances of chat history related to a persona_id
+    response = supabase.table("chat_history").select("*").eq("persona_id", persona_Id).execute()
+    
+    subevent_number = len(response.data) + 1 # Label as 1,2,3,4 depending on how many chats were previously generated
+
+    # fetch a chat history if provided a story_Id
+    if subevent_number > 0:
+        chat_history_start = "You already told the story of "
+        # get the chat history
+        for chat in response.data:
+            chat_history_text += chat.get("message")
+    else:
+        chat_history_text = ""
+
+    # fetch persona based on id
+    response = supabase.table("personas").select("*").eq("id", persona_Id).execute()
+
+    if response:
+        persona = response.data[0] # return first of the list
+
+        prompt = f"""
+        You are a storyteller with a {persona.get("personality")} personality, narrating the events of {persona.get("event")}.
+        The story begins as follows:
+
+        "{chat_history_start}"
+
+        Continue the narrative from this point, focusing on the perspective of {persona.get("name")}, and ensure the continuation is unique and at different a point further in time in the event of {persona.get("event")} without repeating any previous content or phrases. Try a different introduction besides "You already told the story of..." Limit your response to 150 words.
+        """
+        stream = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant who retells a historical event in the perspective of a given character with a given personality."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=200,
+            temperature=0.9,
+            stream=True,
+        )
+
+        story = ""
+        for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                story += chunk.choices[0].delta.content
+
+        # Generate a Title for the subevent:
+        prompt3 = "Based on this story: " + story + ", which is related to the historical event: " + persona.get("event") + ", give it a short title."
+        stream3 = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant who gives a story a title."},
+                {"role": "user", "content": prompt3}
+            ],
+            max_tokens=20,
+            temperature=0.9,
+            stream=True,
+        )
+
+        subevent_title = ""
+        for chunk in stream3:
+            if chunk.choices[0].delta.content is not None:
+                subevent_title += chunk.choices[0].delta.content
+        
+        # Create a new row in database for chat history
+        supabaseResponse = (
+            supabase.table("chat_history")
+            .insert({"persona_id": persona_Id, "message": story, "is_user_input": False, "subevent_number": subevent_number, "subevent_title": subevent_title})
+            .execute()
+        )
+    return jsonify({"id": subevent_number - 1, "title": subevent_title, "content": story, "event": persona.get("event")})
+
+# Generates 4 subevents in a timeline -------------------------------------------------------------------------------------------------------
+
+@app.route("/api/timeline", methods=['GET', 'POST'])
+def timeline(): 
+
+    major_points = ["beginning", "climbing action", "falling action", "conclusion"]
+    persona_Id = "800142"
+
+    chat_history_text = "" # basic text
+    chat_history_start = "You are going continue telling story of "
+
+    # find all instances of chat history related to a persona_id
+    response = supabase.table("chat_history").select("*").eq("persona_id", persona_Id).execute()
+    
+    subevent_number = len(response.data) + 1 # Label as 1,2,3,4 depending on how many chats were previously generated
+
+    # fetch a chat history if provided a story_Id
+    if subevent_number > 0:
+        chat_history_start = "You already told the story of "
+        # get the chat history
+        for chat in response.data:
+            chat_history_text += chat.get("message")
+    else:
+        chat_history_text = ""
+
+    # fetch persona based on id
+    response = supabase.table("personas").select("*").eq("id", persona_Id).execute()
+
+    if response:
+        persona = response.data[0] # return first of the list
+
+        prompt = f"""
+        You are a storyteller with a {persona.get("personality")} personality, narrating the events of {persona.get("event")}.
+        The story begins as follows:
+
+        "{chat_history_start}"
+
+        Continue the narrative from this point, focusing on the perspective of {persona.get("name")}, and ensure the continuation is unique and at different a point further in time in the event of {persona.get("event")} without repeating any previous content or phrases. Try a different introduction besides "You already told the story of..." Limit your response to 150 words.
+        """
+        stream = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant who retells a historical event in the perspective of a given character with a given personality."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=200,
+            temperature=0.9,
+            stream=True,
+        )
+
+        story = ""
+        for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                story += chunk.choices[0].delta.content
+
+        # Generate a Title for the subevent:
+        prompt3 = "Based on this story: " + story + ", which is related to the historical event: " + persona.get("event") + ", give it a short title."
+        stream3 = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant who gives a story a title."},
+                {"role": "user", "content": prompt3}
+            ],
+            max_tokens=20,
+            temperature=0.9,
+            stream=True,
+        )
+
+        subevent_title = ""
+        for chunk in stream3:
+            if chunk.choices[0].delta.content is not None:
+                subevent_title += chunk.choices[0].delta.content
+        
+        # Create a new row in database for chat history
+        supabaseResponse = (
+            supabase.table("chat_history")
+            .insert({"persona_id": persona_Id, "message": story, "is_user_input": False, "subevent_number": subevent_number, "subevent_title": subevent_title})
+            .execute()
+        )
+
+
+    # return a list of json containing:
+    # id: 0,
+    #   title: "Node 1",
+    #   content: "Hi test",
+    #   eventDetails: {
+    #     title: "Event 1",
+    #     description: "Detailed description for Event 1",
+    #     date: "2023",
+    #   },
+
+    return story
+
+
+
+if __name__ == '__main__':
+    app.run(debug=True, port=PORT)
