@@ -182,83 +182,63 @@ def chat():
     return jsonify({"id": subevent_number - 1, "title": subevent_title, "content": story, "event": persona.get("event")})
 
 # Generate more of the story based on persona id and user input
-# @app.route("/api/chatWithUser", methods=['GET', 'POST'])
-# def chat(): 
-#     persona_id = request.args.get("persona_id") # persona id
-#     user_input = request.args.get("user_input")
+@app.route("/api/chatWithUser", methods=['GET', 'POST'])
+def generation(): 
 
-#     chat_history_text = "" # basic text
-#     chat_history_start = "You are going continue telling story of "
-
-#     # find all instances of chat history related to a persona_id
-#     response = supabase.table("chat_history").select("*").eq("persona_id", persona_id).execute()
+    # part of story is already made 
+    persona_id = request.args.get("persona_id") # persona id
+    input = request.args.get("input")
     
-#     subevent_number = len(response.data) + 1 # Label as 1,2,3,4 depending on how many chats were previously generated
 
-#     # fetch a chat history if provided a story_Id
-#     if subevent_number > 0:
-#         chat_history_start = "You already told the story of "
-#         # get the chat history
-#         for chat in response.data:
-#             chat_history_text += chat.get("message")
-#     else:
-#         chat_history_text = ""
+    chat_history_start = ""
 
-#     # fetch persona based on id
-#     response = supabase.table("personas").select("*").eq("id", persona_id).execute()
+    # find all instances of chat history related to a persona_id
+    response = supabase.table("chat_history").select("*").eq("persona_id", persona_id).execute()
+    
+    subevent_number = len(response.data) + 1
 
-#     if response:
-#         persona = response.data[0] # return first of the list
+    # fetch a chat history if provided a story_Id
+    if subevent_number > 0:
+        chat_history_start = "You already told the story of "
+        # get the chat history
+        for chat in response.data:
+            chat_history_text += chat.get("message")
+    else:
+        chat_history_text = ""
 
-#         prompt = f"""
-#         You are a storyteller with a {persona.get("personality")} personality, narrating the events of {persona.get("event")}.
-#         The story begins as follows:
+    # fetch persona based on id
+    response = supabase.table("personas").select("*").eq("id", persona_id).execute()
 
-#         "{chat_history_start}"
+    if response:
+        persona = response.data[0] # return first of the list
 
-#         Continue the narrative from this point, focusing on the perspective of {persona.get("name")}, and ensure the continuation is unique and at different a point further in time in the event of {persona.get("event")} without repeating any previous content or phrases. Try a different introduction besides "You already told the story of..." Limit your response to 150 words.
-#         """
-#         stream = client.chat.completions.create(
-#             model="gpt-4o-mini",
-#             messages=[
-#                 {"role": "system", "content": "You are a helpful assistant who retells a historical event in the perspective of a given character with a given personality."},
-#                 {"role": "user", "content": prompt}
-#             ],
-#             max_tokens=200,
-#             temperature=0.9,
-#             stream=True,
-#         )
+        prompt = f"""
+        Answer the user's prompt {input}
+        You are a storyteller with a {persona.get("personality")} personality, who was narrating the events of {persona.get("event")} but the user asked a question for you to answer.
+        The history of the conversation leading up to the question is:
+        "{chat_history_start}"
 
-#         story = ""
-#         for chunk in stream:
-#             if chunk.choices[0].delta.content is not None:
-#                 story += chunk.choices[0].delta.content
+        Answer the user's question, focusing on the perspective of {persona.get("name")}. Limit your response to 150 words.
+        """
+        stream = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant who retells a historical event in the perspective of a given character with a given personality."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=200,
+            temperature=0.9,
+            stream=True,
+        )
 
-#         # Generate a Title for the subevent:
-#         prompt3 = "Based on this story: " + story + ", which is related to the historical event: " + persona.get("event") + ", give it a short title."
-#         stream3 = client.chat.completions.create(
-#             model="gpt-4o-mini",
-#             messages=[
-#                 {"role": "system", "content": "You are a helpful assistant who gives a story a title."},
-#                 {"role": "user", "content": prompt3}
-#             ],
-#             max_tokens=20,
-#             temperature=0.9,
-#             stream=True,
-#         )
+        for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                yield(chunk.choice[0].delta.content)
 
-#         subevent_title = ""
-#         for chunk in stream3:
-#             if chunk.choices[0].delta.content is not None:
-#                 subevent_title += chunk.choices[0].delta.content
-        
-#         # Create a new row in database for chat history
-#         supabaseResponse = (
-#             supabase.table("chat_history")
-#             .insert({"persona_id": persona_id, "message": story, "is_user_input": False, "subevent_number": subevent_number, "subevent_title": subevent_title})
-#             .execute()
-#         )
-#     return jsonify({"id": subevent_number - 1, "title": subevent_title, "content": story, "event": persona.get("event")})
+        return generation(), {"Content-Type": "text/plain"}
+            
+    # since the user's questions are not part of the story, do not add to history
+    # return jsonify({"content": story})
 
 
 
