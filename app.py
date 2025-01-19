@@ -22,7 +22,7 @@ client = OpenAI(
 )
 
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:5000"])
+CORS(app, origins=["http://localhost:3000"])
 
 # Load JSON data
 # with open("components.json", "r") as file:
@@ -91,7 +91,6 @@ def generate():
         # fetch the persona's ID and return it
         fetchPersonaData = supabase.table("personas").select("*").eq("name", name).eq("personality", personality).eq("event", event).execute()
         print(fetchPersonaData)
-        print("hiii")
         id = fetchPersonaData.data[0].get("id")
 
         return jsonify({"id": id, "name": name, "personality": personality, "event": event})
