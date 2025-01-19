@@ -256,16 +256,6 @@ def timeline():
         )
 
 
-    # return a list of json containing:
-    # id: 0,
-    #   title: "Node 1",
-    #   content: "Hi test",
-    #   eventDetails: {
-    #     title: "Event 1",
-    #     description: "Detailed description for Event 1",
-    #     date: "2023",
-    #   },
-
     return story
 
 
