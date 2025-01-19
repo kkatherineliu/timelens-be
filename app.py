@@ -27,14 +27,16 @@ app = Flask(__name__)
 def home():
     return "Starting flask backend"
 
+#generates a persona with name, personality, event
 @app.route('/api/generate')
 def generate():
     try:
         event = "World War II"
+        # event = request.args.get("event")
 
         prompt = "Give me only the name of one major character from the historical event: " + event
         stream = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant for giving a name of a character from historical events."},
                 {"role": "user", "content": prompt}
@@ -52,7 +54,7 @@ def generate():
 
         prompt2 = "Describe the personality of: " + name + " from the historical event: " + event + " in 30 words or less in a first person perspective"
         stream2 = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant for giving a short description of a character's personality from historical events."},
                 {"role": "user", "content": prompt2}
@@ -67,19 +69,14 @@ def generate():
             if chunk.choices[0].delta.content is not None:
                 personality += chunk.choices[0].delta.content
 
-
-        # Generate a random 6 digit ID
-        random_id = random.randint(100000, 999999)
-
-
         # send this to supabase
         response = (
             supabase.table("personas")
-            .insert({"id": random_id, "name": name, "personality": personality, "event": event})
+            .insert({"name": name, "personality": personality, "event": event})
             .execute()
         )
 
-        return jsonify({"id": random_id, "name": name, "personality": personality, "event": event})
+        return jsonify({"name": name, "personality": personality, "event": event})
     except Exception as e:
         # Print the full error message
         print(f"An error occurred when calling the OpenAI API: {e}")
@@ -88,30 +85,43 @@ def generate():
 
 
 @app.route("/api/chat", methods=['GET', 'POST'])
-def chat():
+def chat(): 
     # persona_Id = request.args.get("persona_id") # persona id
-    # chat_history_Id = request.args.get("chat_history_Id")
 
+    major_points = ["beginning", "climbing action", "falling action", "conclusion"]
     persona_Id = "800142"
-    chat_history_Id = 338594
-    chat_history = None
 
-    chat_history_text = "the beginning" # basic text
+    chat_history_text = "" # basic text
+    chat_history_start = "You are going continue telling story of "
+
+    # find all instances of chat history related to a persona_id
+    response = supabase.table("chat_history").select("*").eq("persona_id", persona_Id).execute()
+    
+    subevent_number = len(response.data) + 1 # Label as 1,2,3,4 depending on how many chats were previously generated
+
     # fetch a chat history if provided a story_Id
-    if chat_history_Id:
-        response = supabase.table("chat_history").select("*").eq("id", chat_history_Id).single().execute()
-        if(response):
-            chat_history = response.data
-            chat_history_text = chat_history.get("message")
+    if subevent_number > 0:
+        chat_history_start = "You already told the story of "
+        # get the chat history
+        for chat in response.data:
+            chat_history_text += chat.get("message")
+    else:
+        chat_history_text = ""
 
     # fetch persona based on id
-    response = supabase.table("personas").select("*").eq("id", persona_Id).single().execute()
+    response = supabase.table("personas").select("*").eq("id", persona_Id).execute()
 
-    # if we have an existing persona, add to story
     if response:
-        persona = response.data
+        persona = response.data[0] # return first of the list
 
-        prompt = "Starting from " + chat_history_text + ", Tell us the story of " + persona.get("event") + " in the perspective of " + persona.get("name") + " who has a personality: " + persona.get("personality") + " Within 150 words."
+        prompt = f"""
+        You are a storyteller with a {persona.get("personality")} personality, narrating the events of {persona.get("event")}.
+        The story begins as follows:
+
+        "{chat_history_start}"
+
+        Continue the narrative from this point, focusing on the perspective of {persona.get("name")}, and ensure the continuation is unique and at different a point further in time in the event of {persona.get("event")} without repeating any previous content or phrases. Try a different introduction besides "You already told the story of..." Limit your response to 150 words.
+        """
         stream = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -127,27 +137,43 @@ def chat():
         for chunk in stream:
             if chunk.choices[0].delta.content is not None:
                 story += chunk.choices[0].delta.content
-    
-    if chat_history:
-        # update the data in supabase if chat_history_id exists (if gpt gets confused, add in the prompt to chat history)
+
+        # Generate a Title for the subevent:
+        prompt3 = "Based on this story: " + story + ", which is related to the historical event: " + persona.get("event") + ", give it a short title."
+        stream3 = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant who gives a story a title."},
+                {"role": "user", "content": prompt3}
+            ],
+            max_tokens=20,
+            temperature=0.9,
+            stream=True,
+        )
+
+        subevent_title = ""
+        for chunk in stream3:
+            if chunk.choices[0].delta.content is not None:
+                subevent_title += chunk.choices[0].delta.content
+
+
+        # Add or update data depending on if chat history
+        # if chat_history_text != "the beginning":
+        #     # update the data in supabase if chat_history_id exists (if gpt gets confused, add in the prompt to chat history)
+        #     supabaseResponse = (
+        #         supabase.table("chat_history")
+        #         .update({"message": chat_history_text + " " + story})
+        #         .eq("id", chat_history_Id)
+        #         .execute()
+        #     )
+        # else:
+            # if no chat_history_id, then create new row in supabase
         supabaseResponse = (
             supabase.table("chat_history")
-            .update({"message": chat_history_text + " " + story})
-            .eq("id", chat_history_Id)
+            .insert({"persona_id": persona_Id, "message": story, "is_user_input": False, "subevent_number": subevent_number, "subevent_title": subevent_title})
             .execute()
         )
-    else:
-
-        # Generate a random 6 digit ID
-        random_id = random.randint(100000, 999999)
-
-        # if no chat_history_id, then create new row in supabase
-        supabaseResponse = (
-            supabase.table("chat_history")
-            .insert({"id": random_id, "persona_id": persona_Id, "message": chat_history_text + " " + story, "is_user_input": False})
-            .execute()
-        )
-        
+            
 
     return story
 
